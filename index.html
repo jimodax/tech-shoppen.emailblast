@@ -1,0 +1,214 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Email Blast</title>
+<style>
+  :root {
+    --bg: #f4f5f7; --card: #ffffff; --text: #1d2129; --muted: #6b7280;
+    --border: #d9dce1; --accent: #2563eb; --accent-hover: #1d4ed8;
+    --ok-bg: #ecfdf3; --ok: #067647; --err-bg: #fef3f2; --err: #b42318;
+    --chip: #eef2ff;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #111318; --card: #1a1d24; --text: #e6e8ec; --muted: #9aa1ad;
+      --border: #2e333d; --accent: #3b82f6; --accent-hover: #60a5fa;
+      --ok-bg: #0f2a1d; --ok: #6ce9a6; --err-bg: #2d1414; --err: #fda29b;
+      --chip: #1e2540;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  .wrap { max-width: 760px; margin: 0 auto; padding: 32px 16px 64px; }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  .sub { color: var(--muted); margin: 0 0 24px; }
+  .card {
+    background: var(--card); border: 1px solid var(--border);
+    border-radius: 12px; padding: 20px; margin-bottom: 16px;
+  }
+  label { display: block; font-weight: 600; margin: 0 0 6px; }
+  .hint { font-weight: 400; color: var(--muted); font-size: 13px; }
+  input, textarea {
+    width: 100%; padding: 10px 12px; border: 1px solid var(--border);
+    border-radius: 8px; background: var(--bg); color: var(--text);
+    font: inherit;
+  }
+  textarea { resize: vertical; }
+  input:focus, textarea:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+  .field + .field { margin-top: 16px; }
+  .meta { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; font-size: 13px; }
+  .chip { background: var(--chip); padding: 2px 10px; border-radius: 999px; }
+  .chip.bad { background: var(--err-bg); color: var(--err); }
+  details summary { cursor: pointer; font-weight: 600; }
+  details[open] summary { margin-bottom: 12px; }
+  .row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  @media (max-width: 560px) { .row { grid-template-columns: 1fr; } }
+  button {
+    width: 100%; padding: 14px; border: 0; border-radius: 10px;
+    background: var(--accent); color: #fff; font: 600 16px system-ui, sans-serif;
+    cursor: pointer;
+  }
+  button:hover:not(:disabled) { background: var(--accent-hover); }
+  button:disabled { opacity: .55; cursor: not-allowed; }
+  .settings-foot { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 12px; }
+  .settings-foot .hint { margin: 0; }
+  .btn-small { width: auto; padding: 8px 20px; font-size: 14px; border-radius: 8px; }
+  .result { margin-top: 16px; padding: 14px 16px; border-radius: 10px; display: none; white-space: pre-wrap; }
+  .result.ok { display: block; background: var(--ok-bg); color: var(--ok); }
+  .result.err { display: block; background: var(--err-bg); color: var(--err); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Email Blast</h1>
+  <p class="sub">Each recipient gets their own copy. Nobody sees who else received it.</p>
+
+  <div class="card">
+    <details id="settings">
+      <summary>Connection settings</summary>
+      <div class="row">
+        <div>
+          <label for="url">n8n webhook URL</label>
+          <input id="url" type="url" placeholder="https://your-n8n.com/webhook/email-blast">
+        </div>
+        <div>
+          <label for="key">Access key</label>
+          <input id="key" type="password" placeholder="Same key as in the workflow">
+        </div>
+      </div>
+      <div class="settings-foot">
+        <p class="hint">Saved in this browser only.</p>
+        <button type="button" id="save" class="btn-small">Save</button>
+      </div>
+    </details>
+  </div>
+
+  <div class="card">
+    <div class="field">
+      <label for="emails">Recipients <span class="hint">separate with commas</span></label>
+      <textarea id="emails" rows="5" placeholder="anna@example.com, bo@example.com, carl@example.com"></textarea>
+      <div class="meta" id="emailMeta"></div>
+    </div>
+
+    <div class="field">
+      <label for="subject">Subject</label>
+      <input id="subject" type="text" placeholder="Subject line">
+    </div>
+
+    <div class="field">
+      <label for="message">Email body</label>
+      <textarea id="message" rows="12" placeholder="Write your message here..."></textarea>
+    </div>
+  </div>
+
+  <button id="send" disabled>Send</button>
+  <div class="result" id="result"></div>
+</div>
+
+<script>
+  const $ = id => document.getElementById(id);
+  const EMAIL_RE = /^[^\s@,;<>]+@[^\s@,;<>]+\.[^\s@,;<>]+$/;
+
+  // Restore saved connection settings
+  try {
+    $('url').value = localStorage.getItem('blast_url') || '';
+    $('key').value = localStorage.getItem('blast_key') || '';
+  } catch (e) {}
+  if (!$('url').value || !$('key').value) $('settings').open = true;
+
+  ['url', 'key'].forEach(id => $(id).addEventListener('input', refresh));
+
+  $('save').addEventListener('click', () => {
+    ['url', 'key'].forEach(id => {
+      try { localStorage.setItem('blast_' + id, $(id).value.trim()); } catch (e) {}
+    });
+    $('settings').open = false;
+    refresh();
+  });
+
+  function parseEmails(raw) {
+    const all = raw.split(/[,;\s]+/).map(e => e.trim().toLowerCase()).filter(Boolean);
+    const unique = [...new Set(all)];
+    return {
+      valid: unique.filter(e => EMAIL_RE.test(e)),
+      invalid: unique.filter(e => !EMAIL_RE.test(e)),
+      duplicates: all.length - unique.length,
+    };
+  }
+
+  function refresh() {
+    const { valid, invalid, duplicates } = parseEmails($('emails').value);
+    let html = '';
+    if (valid.length) html += `<span class="chip">${valid.length} recipient${valid.length === 1 ? '' : 's'}</span>`;
+    if (duplicates) html += `<span class="chip">${duplicates} duplicate${duplicates === 1 ? '' : 's'} removed</span>`;
+    invalid.forEach(e => {
+      const span = document.createElement('span');
+      span.className = 'chip bad';
+      span.textContent = 'Invalid: ' + e;
+      html += span.outerHTML;
+    });
+    $('emailMeta').innerHTML = html;
+
+    $('send').disabled = !(
+      valid.length && $('subject').value.trim() && $('message').value.trim() &&
+      $('url').value.trim() && $('key').value.trim()
+    );
+  }
+
+  ['emails', 'subject', 'message'].forEach(id => $(id).addEventListener('input', refresh));
+  refresh();
+
+  function showResult(type, text) {
+    const r = $('result');
+    r.className = 'result ' + type;
+    r.textContent = text;
+  }
+
+  $('send').addEventListener('click', async () => {
+    const { valid } = parseEmails($('emails').value);
+    if (!confirm(`Send this email to ${valid.length} recipient${valid.length === 1 ? '' : 's'}?`)) return;
+
+    const btn = $('send');
+    btn.disabled = true;
+    btn.textContent = 'Sending...';
+    $('result').className = 'result';
+
+    try {
+      const res = await fetch($('url').value.trim(), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          key: $('key').value.trim(),
+          emails: valid.join(','),
+          subject: $('subject').value.trim(),
+          message: $('message').value,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+
+      if (!res.ok || data.error) {
+        showResult('err', 'Failed: ' + (data.error || `HTTP ${res.status}`));
+      } else {
+        let msg = `Sent to ${data.sent} of ${data.total} recipient${data.total === 1 ? '' : 's'}.`;
+        if (data.failed && data.failed.length) {
+          msg += `\n\nFailed (${data.failed.length}):\n` + data.failed.map(f => `• ${f.email}: ${f.reason}`).join('\n');
+          showResult('err', msg);
+        } else {
+          showResult('ok', msg);
+        }
+      }
+    } catch (e) {
+      showResult('err', 'Could not reach n8n. Check the webhook URL and that the workflow is active.\n\n' + e.message);
+    } finally {
+      btn.textContent = 'Send';
+      refresh();
+    }
+  });
+</script>
+</body>
+</html>
